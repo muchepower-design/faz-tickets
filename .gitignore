@@ -1,7 +1,8 @@
 # Python
 backend/uploads/
-venv/
-env/
+backend/venv/
+backend/env/
+backend/build.zip
 __pycache__/
 *.pyc
 *.db
