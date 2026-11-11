@@ -54,7 +54,30 @@ export default function PaymentPage() {
   const [depositId, setDepositId] = useState(null)
   const [pollStatus, setPollStatus] = useState(null)
 
+  // ── Delivery preferences ──────────────────────────────────────────
+  // Email is always sent (non-negotiable, handled server-side).
+  // WhatsApp is an opt-in toggle, on by default for convenience.
+  const [sendWhatsapp, setSendWhatsapp] = useState(true)
+  const [whatsappNumber, setWhatsappNumber] = useState('')
+  const [useSameWhatsappNumber, setUseSameWhatsappNumber] = useState(true)
+
   const isValidPhone = /^0\d{9}$/.test(phoneNumber)
+  const isValidWhatsapp = /^0\d{9}$/.test(whatsappNumber)
+
+  // When the user opts to use the same number for WhatsApp, keep it in sync
+  useEffect(() => {
+    if (useSameWhatsappNumber) {
+      setWhatsappNumber(phoneNumber)
+    }
+  }, [phoneNumber, useSameWhatsappNumber])
+
+  // If payment phone is valid and WhatsApp number was empty, prefill it
+  useEffect(() => {
+    if (!whatsappNumber && phoneNumber.length === 10) {
+      setWhatsappNumber(phoneNumber)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phoneNumber])
 
   useEffect(() => {
     let cancelled = false
@@ -154,6 +177,15 @@ export default function PaymentPage() {
     setPhoneNumber(input)
   }
 
+  const handleWhatsappChange = (e) => {
+    let input = e.target.value.replace(/\D/g, '')
+    if (input.length > 10) input = input.slice(0, 10)
+    if (input.length > 0 && input[0] !== '0') return
+    setWhatsappNumber(input)
+    // Manual edit means the user no longer wants it tied to payment number
+    if (input !== phoneNumber) setUseSameWhatsappNumber(false)
+  }
+
   const startPolling = (depId) => {
     setDepositId(depId)
     setPollStatus('WAITING')
@@ -194,8 +226,13 @@ export default function PaymentPage() {
       setError('Please enter a valid 10-digit phone number starting with 0')
       return
     }
+    if (sendWhatsapp && !isValidWhatsapp) {
+      setError('Please enter a valid 10-digit WhatsApp number starting with 0')
+      return
+    }
 
     const formattedPhone = '26' + phoneNumber
+    const formattedWhatsapp = sendWhatsapp ? '26' + whatsappNumber : null
 
     setProcessing(true)
     try {
@@ -205,12 +242,20 @@ export default function PaymentPage() {
         phone_number: formattedPhone,
         amount: order.total_amount,
         customer_email: order.customer_email,
+        // ── Delivery preferences ────────────────────────────────
+        // Email is always sent server-side; WhatsApp is opt-in.
+        send_whatsapp: sendWhatsapp,
+        whatsapp_number: formattedWhatsapp,
       }
       const res = await api.post('/api/ticketing/payment/deposit', payload)
       const data = res.data
 
       if (data.success) {
-        toast.success('Payment request sent. Please check your phone to approve.')
+        toast.success(
+          sendWhatsapp
+            ? 'Payment request sent. Tickets will be emailed and sent via WhatsApp.'
+            : 'Payment request sent. Tickets will be emailed.'
+        )
         startPolling(data.depositId)
       } else {
         // Immediate failure from the deposit call — treat like a poll failure
@@ -277,6 +322,10 @@ export default function PaymentPage() {
               <p className="text-blue-600 mt-1">
                 Please check your phone and enter your Mobile Money PIN to approve the payment.
               </p>
+              <p className="text-blue-500 text-xs mt-3">
+                Your tickets will be emailed
+                {sendWhatsapp ? ' and sent via WhatsApp' : ''} once payment is confirmed.
+              </p>
             </div>
           )}
 
@@ -285,6 +334,14 @@ export default function PaymentPage() {
               <span className="text-4xl">✅</span>
               <h3 className="text-lg font-bold text-green-800 mt-2">Payment Complete!</h3>
               <p className="text-green-600">Redirecting to your tickets...</p>
+              <p className="text-green-700 text-xs mt-3">
+                Your tickets have been emailed to <span className="font-mono">{order.customer_email}</span>
+                {sendWhatsapp && whatsappNumber ? (
+                  <> and sent via WhatsApp to <span className="font-mono">+26{whatsappNumber}</span>.</>
+                ) : (
+                  <>.</>
+                )}
+              </p>
             </div>
           )}
 
@@ -352,13 +409,86 @@ export default function PaymentPage() {
                   icon="📱"
                 />
 
+                {/* ── Delivery preferences ─────────────────────────── */}
+                <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 space-y-4">
+                  <div className="flex items-start gap-3">
+                    <span className="text-xl">📧</span>
+                    <div className="text-sm text-gray-700">
+                      <p className="font-medium">Email delivery (always included)</p>
+                      <p className="text-xs text-gray-500 mt-0.5">
+                        Your tickets will be sent to <span className="font-mono">{order.customer_email}</span> as soon as payment is confirmed.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="border-t border-gray-200 pt-4">
+                    <div className="flex items-start gap-3">
+                      <input
+                        id="send-whatsapp"
+                        type="checkbox"
+                        checked={sendWhatsapp}
+                        onChange={(e) => setSendWhatsapp(e.target.checked)}
+                        className="mt-1 h-4 w-4 accent-green-600"
+                      />
+                      <label htmlFor="send-whatsapp" className="text-sm text-gray-700 flex-1">
+                        <span className="font-medium">Also send my tickets via WhatsApp</span>
+                        <span className="block text-xs text-gray-500 mt-0.5">
+                          {order.items?.reduce((s, it) => s + (it.quantity || 0), 0) > 10
+                            ? 'Your tickets will be bundled into a ZIP file.'
+                            : 'Each ticket will be sent as an image.'}
+                        </span>
+                      </label>
+                    </div>
+
+                    {sendWhatsapp && (
+                      <div className="mt-3 pl-7 space-y-3">
+                        <label className="flex items-center gap-2 text-xs text-gray-600">
+                          <input
+                            type="checkbox"
+                            checked={useSameWhatsappNumber}
+                            onChange={(e) => {
+                              setUseSameWhatsappNumber(e.target.checked)
+                              if (e.target.checked) setWhatsappNumber(phoneNumber)
+                            }}
+                            className="h-3.5 w-3.5 accent-green-600"
+                          />
+                          Use the same number as Mobile Money
+                        </label>
+
+                        {!useSameWhatsappNumber && (
+                          <Input
+                            label="WhatsApp Phone Number"
+                            value={whatsappNumber}
+                            onChange={handleWhatsappChange}
+                            placeholder="0xxxxxxxxx (10 digits)"
+                            maxLength={10}
+                            inputMode="numeric"
+                            icon="💬"
+                          />
+                        )}
+
+                        {isValidWhatsapp && (
+                          <p className="text-xs text-gray-500">
+                            Tickets will be sent to{' '}
+                            <span className="font-mono text-gray-700">+26{whatsappNumber}</span>
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
                 <Button
                   type="submit"
                   variant="primary"
                   size="lg"
                   fullWidth
                   loading={processing}
-                  disabled={!isValidPhone || !selectedProvider}
+                  disabled={
+                    !isValidPhone ||
+                    !selectedProvider ||
+                    (sendWhatsapp && !isValidWhatsapp)
+                  }
                 >
                   {processing ? 'Sending...' : `Pay ZMW ${parseFloat(order.total_amount).toFixed(2)}`}
                 </Button>
