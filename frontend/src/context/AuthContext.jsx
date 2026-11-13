@@ -1,125 +1,114 @@
-import { createContext, useContext, useState, useEffect } from 'react'
-import axios from 'axios'
-import toast from 'react-hot-toast'
+// src/context/AuthContext.jsx
+import { createContext, useContext, useState, useEffect } from 'react';
+import axios from 'axios';
+import toast from 'react-hot-toast';
+import { authAPI } from '../api';
 
-const AuthContext = createContext()
-export const useAuth = () => useContext(AuthContext)
+const AuthContext = createContext();
+export const useAuth = () => useContext(AuthContext);
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000'
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 
-const api = axios.create({
-  baseURL: API_URL,
-})
+const api = axios.create({ baseURL: API_URL });
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem('token');
+  if (token) config.headers.Authorization = `Bearer ${token}`;
+  return config;
+});
 
-api.interceptors.request.use(
-  (config) => {
-    const token = localStorage.getItem('token')
-    if (token) config.headers.Authorization = `Bearer ${token}`
-    return config
-  },
-  (error) => Promise.reject(error)
-)
+const attachRoles = (u) => {
+  if (!u) return u;
+  return {
+    ...u,
+    roles: u.role ? [u.role] : (u.roles || ['customer']),
+  };
+};
 
 export const AuthProvider = ({ children }) => {
-  const [user, setUser] = useState(null)
-  const [loading, setLoading] = useState(true)
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const token = localStorage.getItem('token')
-    const storedUser = localStorage.getItem('user')
-    if (token && storedUser) {
+    const token = localStorage.getItem('token');
+    const stored = localStorage.getItem('user');
+    if (token && stored) {
       try {
-        const userData = JSON.parse(storedUser)
-        if (userData.role) userData.roles = [userData.role]
-        else userData.roles = ['customer']
-        setUser(userData)
-        setLoading(false)
-        // Optionally refresh user data in background
+        setUser(attachRoles(JSON.parse(stored)));
         api.get('/api/ticketing/auth/me')
-          .then(res => {
-            const freshUser = res.data
-            if (freshUser.role) freshUser.roles = [freshUser.role]
-            else freshUser.roles = ['customer']
-            setUser(freshUser)
-            localStorage.setItem('user', JSON.stringify(freshUser))
+          .then((res) => {
+            const fresh = attachRoles(res.data);
+            setUser(fresh);
+            localStorage.setItem('user', JSON.stringify(fresh));
           })
           .catch(() => {
-            // Token invalid, clear storage
-            localStorage.removeItem('token')
-            localStorage.removeItem('user')
-            setUser(null)
-          })
-      } catch (e) {
-        localStorage.removeItem('token')
-        localStorage.removeItem('user')
-        setUser(null)
-        setLoading(false)
+            localStorage.removeItem('token');
+            localStorage.removeItem('user');
+            setUser(null);
+          });
+      } catch {
+        setUser(null);
       }
-    } else {
-      setLoading(false)
     }
-  }, [])
+    setLoading(false);
+  }, []);
+
+  const persist = (access_token, userData) => {
+    localStorage.setItem('token', access_token);
+    localStorage.setItem('user', JSON.stringify(userData));
+    setUser(userData);
+  };
 
   const login = async (email, password) => {
     try {
-      const res = await api.post('/api/ticketing/auth/login', { email, password })
-      const token = res.data.access_token
-      let userData = res.data.user
-      if (userData.role) userData.roles = [userData.role]
-      else userData.roles = ['customer']
-      localStorage.setItem('token', token)
-      localStorage.setItem('user', JSON.stringify(userData))
-      setUser(userData)
-      toast.success('Login successful')
-      return true
+      const res = await authAPI.login(email, password);
+      const { access_token, user: userData } = res.data;
+      persist(access_token, attachRoles(userData));
+      toast.success('Welcome back!');
+      return { success: true, user: userData };
     } catch (err) {
-      toast.error(err.response?.data?.error || 'Login failed')
-      return false
+      toast.error(err.response?.data?.error || 'Login failed');
+      return { success: false };
     }
-  }
+  };
 
-  const register = async (userData) => {
+  const register = async (data) => {
     try {
-      const res = await api.post('/api/ticketing/auth/register', userData)
-      const token = res.data.access_token
-      let newUser = res.data.user
-      if (newUser.role) newUser.roles = [newUser.role]
-      else newUser.roles = ['customer']
-      localStorage.setItem('token', token)
-      localStorage.setItem('user', JSON.stringify(newUser))
-      setUser(newUser)
-      toast.success('Account created')
-      return true
+      const res = await authAPI.register(data);
+      const { access_token, user: userData } = res.data;
+      persist(access_token, attachRoles(userData));
+      toast.success('Account created!');
+      return { success: true, user: userData };
     } catch (err) {
-      toast.error(err.response?.data?.error || 'Registration failed')
-      return false
+      toast.error(err.response?.data?.error || 'Registration failed');
+      return { success: false };
     }
-  }
+  };
+
+  // NEW — Google sign-in
+  const loginWithGoogle = async (idToken) => {
+    try {
+      const res = await authAPI.googleLogin(idToken);
+      const { access_token, user: userData, new_user } = res.data;
+      persist(access_token, attachRoles(userData));
+      if (new_user) toast.success('Account created — welcome!');
+      else toast.success('Welcome back!');
+      return { success: true, user: userData, new_user };
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Google sign-in failed');
+      return { success: false };
+    }
+  };
 
   const logout = () => {
-    localStorage.removeItem('token')
-    localStorage.removeItem('user')
-    setUser(null)
-    toast.success('Logged out')
-  }
-
-  const hasRole = (role) => user?.roles?.includes(role) || false
-  const hasAnyRole = (roles) => roles.some(r => user?.roles?.includes(r))
-
-  if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-green-50">
-        <div className="text-center">
-          <div className="w-10 h-10 border-4 border-green-600 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
-          <p className="text-gray-600">Loading session...</p>
-        </div>
-      </div>
-    )
-  }
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
+    setUser(null);
+    toast.success('Logged out');
+  };
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, register, logout, hasRole, hasAnyRole, api }}>
+    <AuthContext.Provider value={{ user, loading, login, register, loginWithGoogle, logout, api }}>
       {children}
     </AuthContext.Provider>
-  )
-}
+  );
+};
